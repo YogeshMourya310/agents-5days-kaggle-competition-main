@@ -19,6 +19,8 @@ export interface AnalysisResult {
   rationale: string;
   analysis_reports: Record<string, AgentResponse>;
   elapsed_seconds: number;
+  elapsed_time_seconds?: number;
+  timestamp?: string;
 }
 
 export interface AgentResponse {
@@ -29,6 +31,7 @@ export interface AgentResponse {
   key_metrics?: Record<string, any>;
   summary?: string;
   data_source?: string;
+  error?: string;
 }
 
 export interface OrchestratorStatus {
@@ -45,4 +48,3 @@ export interface NewsArticle {
   snippet: string;
   image_url?: string;
 }
-

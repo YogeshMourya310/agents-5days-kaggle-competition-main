@@ -1,6 +1,7 @@
 streamlit>=1.28.0
-google-generativeai>=0.3.0
+google-generativeai>=0.8.0
 google-adk[a2a]>=0.1.0
 python-dotenv>=1.0.0
 requests>=2.31.0
-
+yfinance>=0.2.40
+beautifulsoup4>=4.12.0
