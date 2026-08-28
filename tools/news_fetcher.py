@@ -213,14 +213,23 @@ def analyze_sentiment(articles: List[Dict[str, Any]]) -> Dict[str, Any]:
             "article_count": 0
         }
     
+    # Headline-only text (Google News RSS never supplies a description) is short,
+    # so the keyword list needs to cover common short-form financial headline
+    # phrasing, not just long-form article vocabulary.
     positive_words = [
         "surge", "gain", "rise", "jump", "rally", "outperform", "beat",
-        "strong", "growth", "profit", "record", "high", "upgrade", "positive"
+        "strong", "growth", "profit", "record", "high", "upgrade", "positive",
+        "buy rating", "target raised", "raises target", "beats estimates",
+        "wins order", "wins contract", "expands", "soars", "climbs", "advances",
+        "bullish", "dividend", "bonus", "buyback", "top gainer", "rebound"
     ]
-    
+
     negative_words = [
         "plunge", "drop", "fall", "decline", "loss", "miss", "weak",
-        "downgrade", "concern", "risk", "crash", "negative", "lawsuit", "investigation"
+        "downgrade", "concern", "risk", "crash", "negative", "lawsuit", "investigation",
+        "sell rating", "target cut", "cuts target", "misses estimates",
+        "probe", "penalty", "slips", "slides", "tumbles", "bearish",
+        "top loser", "underperform", "layoffs", "resigns"
     ]
     
     positive_count = 0

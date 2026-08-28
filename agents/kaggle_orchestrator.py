@@ -148,46 +148,72 @@ class KaggleOrchestrator:
         trend = data.get("trend", "neutral")
 
         signal = 0.0
-        confidence = 60.0
+        confidence = 50.0  # base; scales up below with data completeness and signal agreement
         notes = []
+        bullish_hits = 0
+        bearish_hits = 0
 
         if trend == "bullish":
             signal += 0.25
+            confidence += 6
+            bullish_hits += 1
             notes.append("bullish trend")
         elif trend == "bearish":
             signal -= 0.25
+            confidence += 6
+            bearish_hits += 1
             notes.append("bearish trend")
 
         if rsi is not None:
+            confidence += 4  # RSI was available at all
             if 45 <= rsi <= 65:
                 signal += 0.08
+                bullish_hits += 1
                 notes.append("healthy momentum")
             elif rsi > 72:
                 signal -= 0.12
+                bearish_hits += 1
                 notes.append("overbought")
             elif rsi < 30:
                 signal += 0.12
+                bullish_hits += 1
                 notes.append("oversold rebound setup")
 
         if sma_50 and sma_200:
+            confidence += 6  # both moving averages resolved
             if sma_50 > sma_200:
                 signal += 0.12
+                bullish_hits += 1
                 notes.append("golden-cross structure")
             else:
                 signal -= 0.12
+                bearish_hits += 1
                 notes.append("weak moving-average structure")
 
         if current_price and sma_50:
             if current_price > sma_50:
                 signal += 0.05
+                bullish_hits += 1
             else:
                 signal -= 0.05
+                bearish_hits += 1
+
+        # Reward agreement across signals (they're all pointing the same way),
+        # penalize a stalemate where indicators conflict with each other.
+        if bullish_hits and bearish_hits == 0:
+            confidence += min(10, bullish_hits * 3)
+        elif bearish_hits and bullish_hits == 0:
+            confidence += min(10, bearish_hits * 3)
+        elif bullish_hits and bearish_hits:
+            confidence -= min(8, abs(bullish_hits - bearish_hits) * -2 + 4)
+
+        confidence = round(max(40.0, min(82.0, confidence)), 1)
 
         return {
             "agent": "technical",
             "ticker": ticker,
             "directional_signal": round(max(-1.0, min(1.0, signal)), 2),
-            "confidence_score": round(confidence, 1),
+            "confidence_score": confidence,
             "key_metrics": {
                 "rsi": round(rsi, 2) if isinstance(rsi, (int, float)) else "N/A",
                 "trend": trend,

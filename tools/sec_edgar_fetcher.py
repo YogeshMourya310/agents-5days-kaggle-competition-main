@@ -41,7 +41,11 @@ def get_recent_filings(ticker: str, filing_type: str = "ANNOUNCEMENT", count: in
     filings: List[Dict[str, Any]] = []
 
     for article in articles:
-        summary = article.get("description") or article.get("title", "")
+        summary = (article.get("description") or article.get("title", "")).strip()
+        if not summary:
+            # No usable text from this article (empty title and description) —
+            # skip it rather than emitting a blank filing summary downstream.
+            continue
         announcement_type = _announcement_type_from_summary(summary)
         if filing_type not in {"ANNOUNCEMENT", "10-K", "10-Q", "8-K"} and filing_type != announcement_type:
             continue
