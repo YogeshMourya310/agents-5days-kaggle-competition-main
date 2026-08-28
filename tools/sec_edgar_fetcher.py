@@ -167,7 +167,8 @@ def check_recent_8k_filings(ticker: str, days: int = 90) -> Dict[str, Any]:
         try:
             parsed_date = datetime.fromisoformat(filing_date)
         except ValueError:
-            recent_filings.append({**filing, "event_type": _announcement_type_from_summary(filing.get("summary", ""))})
+            # Unknown/unparseable date: skip rather than assuming it's recent,
+            # so the 90-day event count isn't silently inflated.
             continue
 
         if parsed_date >= cutoff_date:

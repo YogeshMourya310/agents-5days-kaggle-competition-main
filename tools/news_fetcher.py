@@ -1,17 +1,17 @@
 """
-News fetcher for NSE-oriented sentiment analysis.
+News fetcher for sentiment analysis.
+Fetches news from multiple sources including News API, Polygon, and web scraping.
 """
 
-from __future__ import annotations
-
 import os
-from datetime import datetime, timedelta
-from typing import Any, Dict, List
-
 import requests
+from typing import Dict, List, Any, Optional
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import time
 
-from tools.polygon_fetcher import get_fundamentals, get_stock_news as market_get_news
+# Import Polygon news as fallback
+from tools.polygon_fetcher import get_stock_news as polygon_get_news
 
 load_dotenv()
 
@@ -19,208 +19,301 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 NEWS_API_BASE = "https://newsapi.org/v2"
 
 
-def _search_terms_for_ticker(ticker: str) -> List[str]:
-    """Build India-market search terms from ticker and company metadata."""
-    base = ticker.upper().replace(".NS", "").replace(".BO", "")
-    company = get_fundamentals(base)
-    terms = [base, f"{base} NSE", f"{base} share price"]
-    name = company.get("name") if isinstance(company, dict) else None
-    if isinstance(name, str) and name and name.upper() != base:
-        terms.extend([name, f"{name} NSE", f"{name} results"])
-    return terms
-
-
-def get_recent_news(ticker: str, days: int = 7, limit: int = 20) -> List[Dict[str, Any]]:
-    """Get recent stock news from India-friendly queries and fallbacks."""
-    articles: List[Dict[str, Any]] = []
-
+def get_recent_news(
+    ticker: str,
+    days: int = 7,
+    limit: int = 20
+) -> List[Dict[str, Any]]:
+    """
+    Get recent news articles for a stock from multiple sources.
+    
+    Args:
+        ticker: Stock symbol
+        days: Number of days to look back
+        limit: Maximum number of articles
+    
+    Returns:
+        List of dicts with article information:
+        - title: Article headline
+        - description: Article summary
+        - source: Publisher name
+        - published_date: Publication timestamp
+        - url: Link to full article
+        - sentiment: (optional) Detected sentiment
+    """
+    articles = []
+    
+    # Try News API first (if available)
     if NEWS_API_KEY:
-        articles.extend(_fetch_from_news_api(ticker, days, limit))
-
+        news_api_articles = _fetch_from_news_api(ticker, days, limit)
+        articles.extend(news_api_articles)
+    
+    # Fallback to Polygon news
     if len(articles) < limit:
-        articles.extend(_fetch_from_market_data(ticker, limit - len(articles)))
-
-    if len(articles) < limit:
-        articles.extend(_fetch_from_google_news(ticker, limit - len(articles)))
-
-    deduped = []
-    seen = set()
-    for article in articles:
-        key = (article.get("title", "").strip().lower(), article.get("url", ""))
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(article)
-
-    deduped.sort(key=lambda x: x.get("published_date", ""), reverse=True)
-    return deduped[:limit]
+        polygon_articles = _fetch_from_polygon(ticker, limit - len(articles))
+        articles.extend(polygon_articles)
+    
+    # If still no articles, try web scraping (Google News)
+    if not articles:
+        scraped_articles = _fetch_from_google_news(ticker, limit)
+        articles.extend(scraped_articles)
+    
+    # Sort by date (most recent first)
+    articles.sort(key=lambda x: x.get("published_date", ""), reverse=True)
+    
+    return articles[:limit]
 
 
 def _fetch_from_news_api(ticker: str, days: int, limit: int) -> List[Dict[str, Any]]:
-    """Fetch stock news from NewsAPI using India-market search terms."""
+    """Fetch news from News API."""
     try:
+        # Calculate date range
         from_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-        query = " OR ".join(_search_terms_for_ticker(ticker)[:4])
+        
+        # Search query (ticker + company name variations)
+        query = f"{ticker} OR stock OR shares"
+        
+        url = f"{NEWS_API_BASE}/everything"
         params = {
             "q": query,
             "from": from_date,
             "sortBy": "publishedAt",
             "language": "en",
             "pageSize": limit,
-            "apiKey": NEWS_API_KEY,
+            "apiKey": NEWS_API_KEY
         }
-        response = requests.get(f"{NEWS_API_BASE}/everything", params=params, timeout=10)
+        
+        response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
+        
         data = response.json()
+        
         if data.get("status") != "ok":
             return []
-
-        articles: List[Dict[str, Any]] = []
+        
+        articles = []
         for item in data.get("articles", []):
+            # Filter out removed articles
             if item.get("title") == "[Removed]":
                 continue
-            articles.append(
-                {
-                    "title": item.get("title", ""),
-                    "description": item.get("description", ""),
-                    "source": item.get("source", {}).get("name", "Unknown"),
-                    "published_date": item.get("publishedAt", ""),
-                    "url": item.get("url", ""),
-                    "author": item.get("author", ""),
-                    "content": item.get("content", ""),
-                    "data_source": "news_api_india_query",
-                }
-            )
+            
+            articles.append({
+                "title": item.get("title", ""),
+                "description": item.get("description", ""),
+                "source": item.get("source", {}).get("name", "Unknown"),
+                "published_date": item.get("publishedAt", ""),
+                "url": item.get("url", ""),
+                "author": item.get("author", ""),
+                "content": item.get("content", ""),
+                "data_source": "news_api"
+            })
+        
         return articles
-    except Exception:
+        
+    except Exception as e:
+        print(f"Error fetching from News API: {e}")
         return []
 
 
-def _fetch_from_market_data(ticker: str, limit: int) -> List[Dict[str, Any]]:
-    """Use the market data provider's built-in news endpoint when available."""
+def _fetch_from_polygon(ticker: str, limit: int) -> List[Dict[str, Any]]:
+    """Fetch news from Polygon.io as fallback."""
     try:
-        items = market_get_news(ticker, limit=limit)
-        articles: List[Dict[str, Any]] = []
-        for item in items:
-            articles.append(
-                {
-                    "title": item.get("title", ""),
-                    "description": item.get("description", ""),
-                    "source": item.get("source", "Market Data"),
-                    "published_date": item.get("published_date", ""),
-                    "url": item.get("article_url", ""),
-                    "author": item.get("author", ""),
-                    "keywords": item.get("keywords", []),
-                    "data_source": "market_news",
-                }
-            )
+        polygon_news = polygon_get_news(ticker, limit=limit)
+        
+        # Standardize format
+        articles = []
+        for item in polygon_news:
+            if "error" in item:
+                continue
+            
+            articles.append({
+                "title": item.get("title", ""),
+                "description": item.get("description", ""),
+                "source": item.get("source", "Polygon"),
+                "published_date": item.get("published_date", ""),
+                "url": item.get("article_url", ""),
+                "author": item.get("author", ""),
+                "keywords": item.get("keywords", []),
+                "data_source": "polygon"
+            })
+        
         return articles
-    except Exception:
+        
+    except Exception as e:
+        print(f"Error fetching from Polygon: {e}")
         return []
 
 
 def _fetch_from_google_news(ticker: str, limit: int) -> List[Dict[str, Any]]:
-    """Fetch Google News RSS tuned for Indian equity search terms."""
+    """
+    Scrape Google News as last resort fallback.
+    Note: This is a simplified version and may need adjustments.
+    """
     try:
-        from bs4 import BeautifulSoup
+        # Google News RSS feed, scoped to India for NSE-listed tickers
+        from urllib.parse import quote
 
-        query = _search_terms_for_ticker(ticker)[0]
-        url = f"https://news.google.com/rss/search?q={query}+NSE+India&hl=en-IN&gl=IN&ceid=IN:en"
+        query = quote(f"{ticker} stock NSE")
+        url = f"https://news.google.com/rss/search?q={query}&hl=en-IN&gl=IN&ceid=IN:en"
+
         response = requests.get(url, timeout=10)
         response.raise_for_status()
+        
+        # Parse RSS (simplified)
+        from bs4 import BeautifulSoup
         soup = BeautifulSoup(response.content, "xml")
+        
         items = soup.find_all("item")[:limit]
-
-        articles: List[Dict[str, Any]] = []
+        
+        articles = []
         for item in items:
             title = item.find("title")
             link = item.find("link")
             pub_date = item.find("pubDate")
             source = item.find("source")
-            articles.append(
-                {
-                    "title": title.text if title else "",
-                    "description": "",
-                    "source": source.text if source else "Google News",
-                    "published_date": pub_date.text if pub_date else "",
-                    "url": link.text if link else "",
-                    "data_source": "google_news_rss_india",
-                }
-            )
+            
+            articles.append({
+                "title": title.text if title else "",
+                "description": "",  # RSS doesn't include full description
+                "source": source.text if source else "Google News",
+                "published_date": pub_date.text if pub_date else "",
+                "url": link.text if link else "",
+                "data_source": "google_news_rss"
+            })
+        
         return articles
-    except Exception:
+        
+    except Exception as e:
+        print(f"Error scraping Google News: {e}")
         return []
 
 
 def analyze_sentiment(articles: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Run a lightweight finance-news sentiment pass."""
+    """
+    Analyze overall sentiment from a list of articles.
+    
+    This is a simplified keyword-based approach.
+    In production, would use a model like FinBERT.
+    
+    Args:
+        articles: List of article dicts
+    
+    Returns:
+        Dict with sentiment analysis:
+        - overall_sentiment: 'positive', 'negative', or 'neutral'
+        - positive_count: Number of positive articles
+        - negative_count: Number of negative articles
+        - neutral_count: Number of neutral articles
+        - sentiment_score: Aggregated score (-1 to 1)
+    """
     if not articles:
-        return {"overall_sentiment": "neutral", "sentiment_score": 0.0, "article_count": 0}
-
+        return {
+            "overall_sentiment": "neutral",
+            "sentiment_score": 0.0,
+            "article_count": 0
+        }
+    
     positive_words = [
-        "surge", "gain", "rise", "rally", "beat", "strong", "growth", "profit",
-        "record", "order win", "approval", "upgrade", "dividend", "buyback",
+        "surge", "gain", "rise", "jump", "rally", "outperform", "beat",
+        "strong", "growth", "profit", "record", "high", "upgrade", "positive"
     ]
+    
     negative_words = [
-        "plunge", "drop", "fall", "decline", "loss", "miss", "weak", "downgrade",
-        "concern", "risk", "penalty", "notice", "investigation", "delay",
+        "plunge", "drop", "fall", "decline", "loss", "miss", "weak",
+        "downgrade", "concern", "risk", "crash", "negative", "lawsuit", "investigation"
     ]
-
+    
     positive_count = 0
     negative_count = 0
     neutral_count = 0
-
+    
     for article in articles:
-        text = (article.get("title", "") + " " + article.get("description", "")).lower()
-        pos_score = sum(1 for word in positive_words if word in text)
-        neg_score = sum(1 for word in negative_words if word in text)
+        title = article.get("title", "").lower()
+        description = article.get("description", "").lower()
+        combined_text = title + " " + description
+        
+        # Count sentiment words
+        pos_score = sum(1 for word in positive_words if word in combined_text)
+        neg_score = sum(1 for word in negative_words if word in combined_text)
+        
         if pos_score > neg_score:
             positive_count += 1
         elif neg_score > pos_score:
             negative_count += 1
         else:
             neutral_count += 1
-
+    
+    # Calculate overall sentiment
     total = len(articles)
-    sentiment_score = (positive_count - negative_count) / total if total else 0.0
-    overall = "positive" if sentiment_score > 0.2 else "negative" if sentiment_score < -0.2 else "neutral"
+    sentiment_score = (positive_count - negative_count) / total if total > 0 else 0.0
+    
+    if sentiment_score > 0.2:
+        overall_sentiment = "positive"
+    elif sentiment_score < -0.2:
+        overall_sentiment = "negative"
+    else:
+        overall_sentiment = "neutral"
+    
     return {
-        "overall_sentiment": overall,
+        "overall_sentiment": overall_sentiment,
         "sentiment_score": round(sentiment_score, 2),
         "positive_count": positive_count,
         "negative_count": negative_count,
         "neutral_count": neutral_count,
         "article_count": total,
-        "positive_ratio": round(positive_count / total, 2) if total else 0,
-        "timestamp": datetime.now().isoformat(),
+        "positive_ratio": round(positive_count / total, 2) if total > 0 else 0,
+        "timestamp": datetime.now().isoformat()
     }
 
 
 def detect_key_events(articles: List[Dict[str, Any]]) -> List[str]:
-    """Detect common company-event categories relevant to NSE investors."""
+    """
+    Detect significant events from news articles.
+    
+    Args:
+        articles: List of article dicts
+    
+    Returns:
+        List of detected event types
+    """
     events = set()
+    
     event_keywords = {
-        "Quarterly Results": ["quarterly results", "q1", "q2", "q3", "q4", "earnings", "eps"],
-        "Corporate Action": ["dividend", "buyback", "bonus", "stock split"],
-        "Order Win": ["order", "contract", "project", "deal won"],
-        "Board Update": ["board meeting", "board approves", "fund raise", "allotment"],
-        "Legal Issues": ["lawsuit", "investigation", "notice", "penalty", "regulatory"],
-        "Management Change": ["ceo", "cfo", "appoints", "resigns", "executive"],
-        "Partnership": ["partnership", "collaboration", "strategic alliance"],
+        "Earnings Report": ["earnings", "quarterly results", "q1", "q2", "q3", "q4", "eps"],
+        "M&A Activity": ["merger", "acquisition", "acquires", "m&a", "deal", "takeover"],
+        "Product Launch": ["launch", "unveil", "announce", "new product", "release"],
+        "Legal Issues": ["lawsuit", "investigation", "sec", "regulatory", "probe"],
+        "Executive Change": ["ceo", "cfo", "appoints", "resigns", "executive"],
+        "Dividend/Buyback": ["dividend", "buyback", "repurchase", "shareholder return"],
+        "Guidance Change": ["guidance", "outlook", "forecast", "projects"],
+        "Partnership": ["partnership", "collaboration", "strategic alliance"]
     }
+    
     for article in articles:
         text = (article.get("title", "") + " " + article.get("description", "")).lower()
+        
         for event_type, keywords in event_keywords.items():
             if any(keyword in text for keyword in keywords):
                 events.add(event_type)
-    return sorted(events)
+    
+    return sorted(list(events))
 
 
 def get_news_with_sentiment(ticker: str, days: int = 7) -> Dict[str, Any]:
-    """Return stock news plus sentiment and event summary."""
+    """
+    Get news articles with sentiment analysis.
+    
+    Args:
+        ticker: Stock symbol
+        days: Days to look back
+    
+    Returns:
+        Dict with articles and sentiment analysis
+    """
     articles = get_recent_news(ticker, days=days, limit=20)
     sentiment = analyze_sentiment(articles)
     key_events = detect_key_events(articles)
+    
     return {
         "ticker": ticker,
         "articles": articles,
@@ -228,11 +321,35 @@ def get_news_with_sentiment(ticker: str, days: int = 7) -> Dict[str, Any]:
         "key_events": key_events,
         "article_count": len(articles),
         "days_analyzed": days,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now().isoformat()
     }
 
 
+# Test function
 if __name__ == "__main__":
-    ticker = "RELIANCE"
+    ticker = "NVDA"
+    
+    print(f"Testing news fetcher for {ticker}...\n")
+    
+    print("1. Fetching recent news:")
     news_data = get_news_with_sentiment(ticker, days=7)
-    print(f"Found {news_data['article_count']} articles for {ticker}")
+    
+    print(f"   Found {news_data['article_count']} articles")
+    
+    print("\n2. Top 3 headlines:")
+    for i, article in enumerate(news_data["articles"][:3], 1):
+        print(f"   {i}. {article['title']}")
+        print(f"      Source: {article['source']} | {article['published_date'][:10]}")
+    
+    print("\n3. Sentiment Analysis:")
+    sentiment = news_data["sentiment_analysis"]
+    print(f"   Overall: {sentiment['overall_sentiment'].upper()}")
+    print(f"   Score: {sentiment['sentiment_score']}")
+    print(f"   Positive: {sentiment['positive_count']} | Negative: {sentiment['negative_count']} | Neutral: {sentiment['neutral_count']}")
+    
+    print("\n4. Key Events Detected:")
+    if news_data["key_events"]:
+        for event in news_data["key_events"]:
+            print(f"   - {event}")
+    else:
+        print("   No major events detected")
