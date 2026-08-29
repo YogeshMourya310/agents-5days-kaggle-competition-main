@@ -30,7 +30,7 @@ def _base_symbol(ticker: str) -> str:
 def _get_history_by_period(symbol: str, period: str, interval: str) -> Any:
     """Fetch history using a named yfinance period (e.g. '5d', '1y', 'max')."""
     ticker = yf.Ticker(symbol)
-    return ticker.history(period=period, interval=interval, auto_adjust=False)
+    return ticker.history(period=period, interval=interval, auto_adjust=True)
 
 
 def _get_history(symbol: str, days: int, interval: str) -> Any:
@@ -50,7 +50,7 @@ def _get_history(symbol: str, days: int, interval: str) -> Any:
     # short of the calendar-day window we actually need (e.g. 200 SMA
     # periods needs ~200 *trading* days, which spans more calendar days).
     start = end - timedelta(days=max(days, 5) * 2 + 30)
-    return ticker.history(start=start, end=end, interval=interval, auto_adjust=False)
+    return ticker.history(start=start, end=end, interval=interval, auto_adjust=True)
 
 
 def _extract_info(symbol: str) -> Dict[str, Any]:
