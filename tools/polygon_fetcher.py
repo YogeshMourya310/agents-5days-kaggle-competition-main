@@ -137,6 +137,13 @@ def get_price_history(
             # Exact calendar-day window via start/end — avoids passing an
             # invalid "{N}d" string as a named period (see _get_history).
             history = _get_history(symbol, days=effective_days, interval=interval)
+
+        # Drop any incomplete bar (e.g. today's in-progress session, or a
+        # holiday row Yahoo returns with NaN OHLC) — a single NaN close here
+        # poisons every downstream calculation (RSI, SMA, current_price).
+        if not history.empty:
+            history = history.dropna(subset=["Open", "High", "Low", "Close"])
+
         if history.empty:
             return {
                 "error": f"No price history available for {symbol}",
@@ -182,6 +189,8 @@ def get_latest_price(ticker: str) -> Dict[str, Any]:
 
     try:
         history = _get_history_by_period(symbol, period="5d", interval="1d")
+        if not history.empty:
+            history = history.dropna(subset=["Open", "High", "Low", "Close"])
         if history.empty:
             return {"error": f"No price data available for {symbol}", "ticker": _base_symbol(symbol)}
 
