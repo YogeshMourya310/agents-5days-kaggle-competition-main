@@ -70,45 +70,56 @@ class KaggleOrchestrator:
         sector = data.get("sector", "Unknown")
 
         signal = 0.0
-        confidence = 60.0
+        confidence = 55.0
         notes = []
 
         if market_cap >= 1_000_000_000_000:
-            signal += 0.18
-            confidence += 8
+            signal += 0.15
+            confidence += 6
             notes.append("large-cap stability")
         elif market_cap >= 200_000_000_000:
             signal += 0.08
-            confidence += 5
+            confidence += 4
             notes.append("mid-to-large cap scale")
         else:
             signal -= 0.05
             notes.append("smaller-cap volatility")
 
-        if pe_ratio is not None:
+        # Continuous P/E scaling instead of coarse buckets, so two stocks with
+        # different valuations can't accidentally land on the same signal —
+        # cheaper (lower P/E) scores higher, richer (higher P/E) scores lower.
+        if pe_ratio is not None and pe_ratio > 0:
+            if pe_ratio < 45:
+                pe_component = (30 - pe_ratio) / 100  # ranges ~ -0.15 to +0.30
+            else:
+                pe_component = -0.2
+            signal += pe_component
+            confidence += min(10, abs(pe_component) * 25)
             if pe_ratio < 18:
-                signal += 0.18
                 notes.append("reasonable valuation")
             elif pe_ratio < 30:
-                signal += 0.05
                 notes.append("acceptable valuation")
             elif pe_ratio > 45:
-                signal -= 0.2
                 notes.append("stretched valuation")
+            else:
+                notes.append("full valuation")
 
-        if price_to_book is not None:
+        # Continuous P/B scaling — same principle.
+        if price_to_book is not None and price_to_book > 0:
+            pb_component = (3.5 - price_to_book) / 40  # ranges roughly -0.1 to +0.08
+            signal += pb_component
+            confidence += min(6, abs(pb_component) * 40)
             if price_to_book > 6:
-                signal -= 0.08
                 notes.append("rich book valuation")
             elif price_to_book < 2.5:
-                signal += 0.05
                 notes.append("disciplined price-to-book")
 
         if dividend_yield:
             signal += 0.03
+            confidence += 2
             notes.append("shareholder payout support")
 
-        confidence = min(85.0, confidence)
+        confidence = round(max(40.0, min(85.0, confidence)), 1)
         signal = max(-1.0, min(1.0, signal))
 
         return {
