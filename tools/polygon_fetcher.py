@@ -8,7 +8,7 @@ equities through Yahoo Finance style symbols such as `RELIANCE.NS`.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List
 
 import yfinance as yf
@@ -27,10 +27,30 @@ def _base_symbol(ticker: str) -> str:
     return normalize_ticker(ticker).split(".")[0]
 
 
-def _get_history(symbol: str, period: str, interval: str) -> Any:
-    """Fetch history with a single helper so retries/fallbacks stay centralized."""
+def _get_history_by_period(symbol: str, period: str, interval: str) -> Any:
+    """Fetch history using a named yfinance period (e.g. '5d', '1y', 'max')."""
     ticker = yf.Ticker(symbol)
     return ticker.history(period=period, interval=interval, auto_adjust=False)
+
+
+def _get_history(symbol: str, days: int, interval: str) -> Any:
+    """
+    Fetch history spanning an exact number of calendar days.
+
+    yfinance's `period` parameter only accepts a fixed set of named values
+    (1d,5d,1mo,3mo,6mo,1y,2y,5y,10y,ytd,max) — an arbitrary string like
+    "365d" is silently forwarded to Yahoo's API, which doesn't recognize it
+    and falls back to a much shorter default range. Passing explicit
+    start/end dates avoids that entirely and gives back exactly the window
+    we asked for.
+    """
+    ticker = yf.Ticker(symbol)
+    end = datetime.now()
+    # Pad the request so trading-day gaps (weekends/holidays) don't leave us
+    # short of the calendar-day window we actually need (e.g. 200 SMA
+    # periods needs ~200 *trading* days, which spans more calendar days).
+    start = end - timedelta(days=max(days, 5) * 2 + 30)
+    return ticker.history(start=start, end=end, interval=interval, auto_adjust=False)
 
 
 def _extract_info(symbol: str) -> Dict[str, Any]:
@@ -53,7 +73,7 @@ def get_fundamentals(ticker: str) -> Dict[str, Any]:
 
     try:
         info = _extract_info(symbol)
-        history = _get_history(symbol, period="5d", interval="1d")
+        history = _get_history_by_period(symbol, period="5d", interval="1d")
 
         current_price = 0.0
         if not history.empty:
@@ -108,10 +128,15 @@ def get_price_history(
         "month": ("1mo", max(days, 90)),
     }
     interval, effective_days = interval_map.get(timespan, ("1d", max(days, 5)))
-    period = f"{effective_days}d" if interval != "1mo" else "max"
 
     try:
-        history = _get_history(symbol, period=period, interval=interval)
+        if interval == "1mo":
+            # "max" is a genuinely valid named yfinance period.
+            history = _get_history_by_period(symbol, period="max", interval=interval)
+        else:
+            # Exact calendar-day window via start/end — avoids passing an
+            # invalid "{N}d" string as a named period (see _get_history).
+            history = _get_history(symbol, days=effective_days, interval=interval)
         if history.empty:
             return {
                 "error": f"No price history available for {symbol}",
@@ -156,7 +181,7 @@ def get_latest_price(ticker: str) -> Dict[str, Any]:
     symbol = normalize_ticker(ticker)
 
     try:
-        history = _get_history(symbol, period="5d", interval="1d")
+        history = _get_history_by_period(symbol, period="5d", interval="1d")
         if history.empty:
             return {"error": f"No price data available for {symbol}", "ticker": _base_symbol(symbol)}
 
